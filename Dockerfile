@@ -16,6 +16,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY main.py .
 
-VOLUME ["/app/data", "/app/tdlib-session"]
+VOLUME ["/app/data"]
 
 CMD ["python", "main.py"]

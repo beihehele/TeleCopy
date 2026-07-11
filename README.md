@@ -78,17 +78,17 @@ Tagged releases publish a Linux `amd64` Docker image to GitHub Container Registr
 docker pull ghcr.io/beihehele/telecopy:latest
 ```
 
-Run TeleCopy with your `.env` file and persistent TDLib state:
+Run TeleCopy with your `.env` file and persistent TDLib state.
+Host directory `./data` is bind-mounted to `/app/data` so sessions and copy progress survive container restarts:
 
 ```bash
 docker run --rm -it \
   --env-file .env \
-  -v telecopy-data:/app/data \
-  -v telecopy-session:/app/tdlib-session \
+  -v ./data:/app/data \
   ghcr.io/beihehele/telecopy:latest
 ```
 
-Or deploy with Docker Compose:
+Or use the included `docker-compose.yml`:
 
 ```yaml
 services:
@@ -99,12 +99,7 @@ services:
     stdin_open: true
     tty: true
     volumes:
-      - telecopy-data:/app/data
-      - telecopy-session:/app/tdlib-session
-
-volumes:
-  telecopy-data:
-  telecopy-session:
+      - ./data:/app/data
 ```
 
 Start an interactive session with:
