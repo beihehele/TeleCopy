@@ -110,11 +110,7 @@ class TeleCopy:
                     pass
                 self.tg = None
                 self.session_active = False
-            for d in ("tdlib-session", "data"):
-                try:
-                    shutil.rmtree(d)
-                except FileNotFoundError:
-                    pass
+            self._clear_runtime_dirs()
             self.copied.clear()
             self._pending_saves = 0
 
@@ -124,6 +120,26 @@ class TeleCopy:
 
         self._init_telegram()
         log.info("✅ Connected to Telegram.")
+
+    @staticmethod
+    def _clear_runtime_dirs():
+        """Clear session/runtime files without removing mount points.
+
+        Docker bind-mounts like ./data:/app/data make rmtree('data') fail with
+        OSError: Device or resource busy. Clear contents instead.
+        """
+        for d in ("tdlib-session", "data"):
+            if not os.path.isdir(d):
+                continue
+            for name in os.listdir(d):
+                path = os.path.join(d, name)
+                try:
+                    if os.path.isdir(path) and not os.path.islink(path):
+                        shutil.rmtree(path)
+                    else:
+                        os.unlink(path)
+                except FileNotFoundError:
+                    pass
 
     def _init_telegram(self):
         # Stop any previously-created client so its background threads do not
@@ -587,12 +603,8 @@ class TeleCopy:
                     self.tg.stop()
                 except Exception:
                     pass
-            for d in ("tdlib-session", "data"):
-                try:
-                    shutil.rmtree(d)
-                    log.info("Removed %s/", d)
-                except FileNotFoundError:
-                    pass
+            self._clear_runtime_dirs()
+            log.info("Cleared runtime data under data/ and tdlib-session/.")
             self.copied.clear()
             self._pending_saves = 0
             self.tg = None
