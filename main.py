@@ -43,6 +43,7 @@ SESSION_CFG_PATH = "data/last_session_config.json"
 SAVE_EVERY = 50          # flush copy-map to disk after every N new copies
 MAX_COPY_ATTEMPTS = 5    # max forwarding attempts before giving up on a message
 MAX_FLOOD_WAIT = 300     # cap server-requested FloodWait to this many seconds
+NEW_MESSAGE_UPDATE = "updateNewMessage"
 
 
 class TeleCopy:
@@ -520,7 +521,7 @@ class TeleCopy:
         pending: set[int] = set()  # message IDs currently being forwarded
 
         def handle_update(update):
-            if update.get("@type") != "updateNewMessage":
+            if update.get("@type") != NEW_MESSAGE_UPDATE:
                 return
             message = update["message"]
             if message["chat_id"] != src:
@@ -542,7 +543,7 @@ class TeleCopy:
                     pending.discard(mid)
 
         self.monitoring = True
-        self.tg.add_update_handler(handle_update)
+        self.tg.add_update_handler(NEW_MESSAGE_UPDATE, handle_update)
         log.info("📡 Live monitoring started. Press Ctrl+C to stop.")
         try:
             while self.monitoring:
@@ -552,7 +553,7 @@ class TeleCopy:
         finally:
             self.monitoring = False
             try:
-                self.tg.remove_update_handler(handle_update)
+                self.tg.remove_update_handler(NEW_MESSAGE_UPDATE, handle_update)
             except Exception:
                 pass
             log.info("Live monitoring stopped.")
