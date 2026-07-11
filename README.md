@@ -70,6 +70,69 @@ python main.py
 
 ---
 
+## 🐳 Docker Image
+
+Tagged releases publish a Linux `amd64` Docker image to GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/beihehele/telecopy:latest
+```
+
+Run TeleCopy with your `.env` file and persistent TDLib state:
+
+```bash
+docker run --rm -it \
+  --env-file .env \
+  -v telecopy-data:/app/data \
+  -v telecopy-session:/app/tdlib-session \
+  ghcr.io/beihehele/telecopy:latest
+```
+
+Or deploy with Docker Compose:
+
+```yaml
+services:
+  telecopy:
+    image: ghcr.io/beihehele/telecopy:latest
+    env_file:
+      - .env
+    stdin_open: true
+    tty: true
+    volumes:
+      - telecopy-data:/app/data
+      - telecopy-session:/app/tdlib-session
+
+volumes:
+  telecopy-data:
+  telecopy-session:
+```
+
+Start an interactive session with:
+
+```bash
+docker compose run --rm telecopy
+```
+
+---
+
+## 📦 Release Docker Image
+
+Create and push a tag that starts with `v` to publish a Docker image:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The release workflow publishes:
+
+- `ghcr.io/beihehele/telecopy:v1.0.0`
+- `ghcr.io/beihehele/telecopy:latest`
+
+The workflow only builds `linux/amd64`. If anonymous pulls are required, make the GHCR package public in the repository's package settings.
+
+---
+
 ### Note
 For `TeleCopy` to work, you need an `API_ID` and `API_HASH`.
 
