@@ -171,9 +171,7 @@ python main.py
 | `DB_PASSWORD` | ✅ | Encryption key for the local TDLib database |
 | `FILES_DIRECTORY` | ❌ | Where TDLib stores downloaded media (default: `data/tdlib_files`) |
 | `SEND_COPY` | ❌ | `true` strips "Forwarded from" header; `false` preserves it (default: `true`) |
-| `PROXY_TYPE` | ❌ | `proxyTypeMtproto`, `proxyTypeHttp`, or `proxyTypeSocks5` |
-| `PROXY_SERVER` | ❌ | Proxy hostname |
-| `PROXY_PORT` | ❌ | Proxy port |
+| `PROXY_URL` | ❌ | SOCKS5 proxy URL, e.g. `socks5://user:pass@host:port` |
 
 \* Set interactively via menu option 1 after connecting.
 

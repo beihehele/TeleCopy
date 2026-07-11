@@ -11,6 +11,7 @@ import time
 import re
 import atexit
 from datetime import datetime, timezone
+from urllib.parse import unquote, urlparse
 from dotenv import load_dotenv, set_key, find_dotenv
 from telegram.client import Telegram
 from tqdm import tqdm
@@ -135,25 +136,61 @@ class TeleCopy:
             self.tg = None
             self.session_active = False
 
-        proxy_type = os.getenv("PROXY_TYPE")
-        proxy_port_raw = os.getenv("PROXY_PORT")
-        try:
-            proxy_port = int(proxy_port_raw) if proxy_port_raw else None
-        except ValueError:
-            log.warning("PROXY_PORT '%s' is not a valid integer — proxy disabled.", proxy_port_raw)
-            proxy_port = None
+        proxy_server, proxy_port, proxy_type = self._load_proxy_settings()
         self.tg = Telegram(
             api_id=os.getenv("API_ID"),
             api_hash=os.getenv("API_HASH"),
             phone=os.getenv("PHONE"),
             database_encryption_key=os.getenv("DB_PASSWORD"),
             files_directory=os.getenv("FILES_DIRECTORY", "data/tdlib_files"),
-            proxy_server=os.getenv("PROXY_SERVER"),
+            proxy_server=proxy_server,
             proxy_port=proxy_port,
-            proxy_type={"@type": proxy_type} if proxy_type else None,
+            proxy_type=proxy_type,
         )
         self.tg.login()
         self.session_active = True
+
+    @staticmethod
+    def _load_proxy_settings():
+        """Parse PROXY_URL into TDLib proxy_server / proxy_port / proxy_type.
+
+        Supported form:
+          socks5://user:pass@host:port
+        """
+        proxy_url = (os.getenv("PROXY_URL") or "").strip().strip("\"'")
+        if not proxy_url:
+            return "", None, None
+
+        try:
+            parsed = urlparse(proxy_url)
+        except Exception as e:
+            log.warning("Invalid PROXY_URL — proxy disabled: %s", e)
+            return "", None, None
+
+        if (parsed.scheme or "").lower() != "socks5":
+            log.warning(
+                "Unsupported PROXY_URL scheme '%s' — use socks5://",
+                parsed.scheme,
+            )
+            return "", None, None
+        try:
+            proxy_port = parsed.port
+        except ValueError as e:
+            log.warning("Invalid PROXY_URL port — proxy disabled: %s", e)
+            return "", None, None
+
+        if not parsed.hostname or proxy_port is None:
+            log.warning("PROXY_URL must include host and port — proxy disabled.")
+            return "", None, None
+
+        proxy_type = {"@type": "proxyTypeSocks5"}
+        username = unquote(parsed.username) if parsed.username else ""
+        password = unquote(parsed.password) if parsed.password else ""
+        if username or password:
+            proxy_type["username"] = username
+            proxy_type["password"] = password
+
+        return parsed.hostname, proxy_port, proxy_type
 
     # ── Chat selection ──────────────────────────────────────────────────────
 
