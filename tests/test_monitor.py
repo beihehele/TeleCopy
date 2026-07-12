@@ -250,6 +250,38 @@ def test_dispatcher_buffers_album_when_album_id_is_string():
     ]
 
 
+def test_dispatcher_ignores_album_from_unmonitored_chat():
+    FakeTimer.instances.clear()
+    client = FakeTdlibClient()
+    copy_service = RecordingCopyService()
+    builtin = Route(-1001, -2001)
+    dispatcher = MonitorDispatcher(
+        client,
+        copy_service,
+        make_registry(builtin),
+        builtin,
+        album_wait_seconds=1.0,
+        timer_factory=FakeTimer,
+    )
+
+    for message_id in (11, 12):
+        dispatcher.handle_update(
+            {
+                "@type": "updateNewMessage",
+                "message": {
+                    "id": message_id,
+                    "chat_id": -1004414585224,
+                    "media_album_id": "555",
+                    "content": {"@type": "messageVideo"},
+                },
+            }
+        )
+
+    assert copy_service.items == []
+    assert FakeTimer.instances == []
+    assert dispatcher._album_buffers == {}
+
+
 def test_dispatcher_forwards_non_album_immediately():
     FakeTimer.instances.clear()
     client = FakeTdlibClient()

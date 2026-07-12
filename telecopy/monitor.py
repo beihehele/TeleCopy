@@ -94,6 +94,9 @@ class MonitorDispatcher:
         if type(message_id) is not int or message_id <= 0:
             return
 
+        if not self._registry.destinations_for(source_id):
+            return
+
         album_id = parse_media_album_id(message.get("media_album_id"))
         if album_id == 0:
             self._enqueue_to_destinations(source_id, (message_id,))
@@ -125,14 +128,17 @@ class MonitorDispatcher:
         with self._lock:
             message_ids = sorted(self._album_buffers.pop(key, ()))
             self._cancel_timer_locked(key)
-        if message_ids:
-            logger.info(
-                "Flushing media album %s from chat %d (%d messages)",
-                album_id,
-                source_id,
-                len(message_ids),
-            )
-            self._enqueue_to_destinations(source_id, tuple(message_ids))
+        if not message_ids:
+            return
+        if not self._registry.destinations_for(source_id):
+            return
+        logger.info(
+            "Flushing media album %s from chat %d (%d messages)",
+            album_id,
+            source_id,
+            len(message_ids),
+        )
+        self._enqueue_to_destinations(source_id, tuple(message_ids))
 
     def _cancel_timer_locked(self, key: tuple[int, int]) -> None:
         timer = self._album_timers.pop(key, None)
