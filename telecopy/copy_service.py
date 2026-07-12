@@ -13,7 +13,11 @@ from typing import Protocol
 from telecopy.config import Route
 from telecopy.database import CopyJob, StateStore
 from telecopy.tasks import RouteRegistry
-from telecopy.tdlib_client import EXCLUDE_TYPES, TdlibResponseError
+from telecopy.tdlib_client import (
+    EXCLUDE_TYPES,
+    TdlibResponseError,
+    parse_media_album_id,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -324,9 +328,7 @@ class CopyService:
                     message_id,
                     "History contains an invalid message ID",
                 )
-                album_id = message.get("media_album_id") or 0
-                if type(album_id) is not int:
-                    album_id = 0
+                album_id = parse_media_album_id(message.get("media_album_id"))
                 if album_id == 0:
                     if not flush_pending():
                         break

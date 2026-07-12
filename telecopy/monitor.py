@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import logging
 from threading import Lock, Timer
 
 from telecopy.config import Route
 from telecopy.copy_service import CopyService
 from telecopy.tasks import RouteRegistry
-from telecopy.tdlib_client import EXCLUDE_TYPES, NEW_MESSAGE_UPDATE
+from telecopy.tdlib_client import (
+    EXCLUDE_TYPES,
+    NEW_MESSAGE_UPDATE,
+    parse_media_album_id,
+)
 
-DEFAULT_ALBUM_WAIT_SECONDS = 1.0
+DEFAULT_ALBUM_WAIT_SECONDS = 1.5
 TimerFactory = Callable[..., Timer]
+
+logger = logging.getLogger(__name__)
 
 
 class MonitorDispatcher:
@@ -87,8 +94,8 @@ class MonitorDispatcher:
         if type(message_id) is not int or message_id <= 0:
             return
 
-        album_id = message.get("media_album_id") or 0
-        if type(album_id) is not int or album_id == 0:
+        album_id = parse_media_album_id(message.get("media_album_id"))
+        if album_id == 0:
             self._enqueue_to_destinations(source_id, (message_id,))
             return
 
@@ -119,6 +126,12 @@ class MonitorDispatcher:
             message_ids = sorted(self._album_buffers.pop(key, ()))
             self._cancel_timer_locked(key)
         if message_ids:
+            logger.info(
+                "Flushing media album %s from chat %d (%d messages)",
+                album_id,
+                source_id,
+                len(message_ids),
+            )
             self._enqueue_to_destinations(source_id, tuple(message_ids))
 
     def _cancel_timer_locked(self, key: tuple[int, int]) -> None:

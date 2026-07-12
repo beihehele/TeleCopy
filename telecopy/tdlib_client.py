@@ -37,6 +37,24 @@ EXCLUDE_TYPES = frozenset({
 })
 
 
+def parse_media_album_id(value: object) -> int:
+    """Parse TDLib media_album_id (JSON int64, often a string).
+
+    Returns 0 when the message is not part of an album.
+    """
+    if value is None or value == 0 or value == "0":
+        return 0
+    if type(value) is int:
+        return value if value > 0 else 0
+    if type(value) is str:
+        try:
+            parsed = int(value)
+        except ValueError:
+            return 0
+        return parsed if parsed > 0 else 0
+    return 0
+
+
 class TdlibClientError(RuntimeError):
     """Base exception for TDLib adapter failures."""
 

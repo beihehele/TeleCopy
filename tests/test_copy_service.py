@@ -283,6 +283,47 @@ def test_history_job_groups_album_messages_into_one_forward(
     assert job.id == results[0].job_id
 
 
+def test_history_job_groups_album_when_album_id_is_string(
+    store,
+    registry,
+    fake_client,
+    route,
+):
+    fake_client.history = [
+        {
+            "id": 13,
+            "media_album_id": "555",
+            "content": {"@type": "messageVideo"},
+        },
+        {
+            "id": 12,
+            "media_album_id": "555",
+            "content": {"@type": "messageVideo"},
+        },
+        {
+            "id": 11,
+            "media_album_id": "555",
+            "content": {"@type": "messageVideo"},
+        },
+    ]
+    factory = CapturingThreadFactory()
+    service = CopyService(
+        fake_client,
+        store,
+        registry,
+        thread_factory=factory,
+    )
+
+    service.start_history_job(route, 42, 99)
+    factory.targets[0]()
+    while service._process_next_for_test():
+        pass
+
+    assert fake_client.forwarded == [
+        (route.source_id, route.destination_id, (11, 12, 13), True),
+    ]
+
+
 def test_flood_wait_uses_server_delay_with_cap_and_bounded_attempts(
     store,
     registry,
