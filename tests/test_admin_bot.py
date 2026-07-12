@@ -312,3 +312,33 @@ def test_admin_bot_rejects_non_private_chat(monkeypatch, store, registry):
     )
 
     assert sent_messages == []
+
+
+def test_api_request_passes_numeric_timeout(monkeypatch, store, registry):
+    config = make_config(
+        monkeypatch,
+        BOT_TOKEN="token",
+        BOT_ADMIN_IDS="42",
+    )
+    timeouts = []
+
+    def opener(request, timeout=None):
+        timeouts.append(timeout)
+        return FakeResponse({"ok": True, "result": []})
+
+    bot = AdminBot(
+        config,
+        AdminCommands(
+            config,
+            store,
+            registry,
+            FakeTdlib(),
+            FakeCopyService(),
+        ),
+        opener=opener,
+    )
+
+    bot._api_request("getUpdates", {"offset": 0, "timeout": 30})
+
+    assert timeouts == [35]
+    assert isinstance(timeouts[0], int)

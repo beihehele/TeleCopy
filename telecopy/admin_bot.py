@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 _BOT_API_BASE = "https://api.telegram.org/bot{token}/{method}"
 _POLL_TIMEOUT_SECONDS = 30
-_REQUEST_TIMEOUT_SECONDS = (_POLL_TIMEOUT_SECONDS + 5, 35)
+_REQUEST_TIMEOUT_SECONDS = _POLL_TIMEOUT_SECONDS + 5
 _MAX_NETWORK_BACKOFF_SECONDS = 30
 
 
