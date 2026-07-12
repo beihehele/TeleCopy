@@ -1,6 +1,8 @@
 import json
 from io import BytesIO
 from pathlib import Path
+import http.client
+import logging
 import urllib.error
 import urllib.request
 
@@ -343,6 +345,46 @@ def test_api_request_passes_numeric_timeout(monkeypatch, store, registry):
 
     assert timeouts == [35]
     assert isinstance(timeouts[0], int)
+
+
+def test_poll_loop_treats_remote_disconnect_as_network_warning(
+    monkeypatch,
+    store,
+    registry,
+    caplog,
+):
+    config = make_config(
+        monkeypatch,
+        BOT_TOKEN="token",
+        BOT_ADMIN_IDS="42",
+    )
+
+    def opener(request, timeout=None):
+        raise http.client.RemoteDisconnected(
+            "Remote end closed connection without response"
+        )
+
+    bot = AdminBot(
+        config,
+        AdminCommands(
+            config,
+            store,
+            registry,
+            FakeTdlib(),
+            FakeCopyService(),
+        ),
+        opener=opener,
+    )
+    bot._wait = lambda seconds: (bot._stop_event.set() or True)
+
+    with caplog.at_level(logging.WARNING):
+        bot._poll_loop()
+
+    assert any("Bot API network error" in record.message for record in caplog.records)
+    assert not any(
+        "Bot polling failed unexpectedly" in record.message
+        for record in caplog.records
+    )
 
 
 def test_build_http_opener_without_proxy_uses_urlopen():

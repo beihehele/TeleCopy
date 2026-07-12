@@ -341,6 +341,15 @@ class AdminBot:
                         _MAX_NETWORK_BACKOFF_SECONDS,
                     )
                 continue
+            except OSError as error:
+                # Proxy drops / RemoteDisconnected / connection resets.
+                logger.warning("Bot API network error: %s", error)
+                if self._wait(backoff_seconds):
+                    backoff_seconds = min(
+                        backoff_seconds * 2,
+                        _MAX_NETWORK_BACKOFF_SECONDS,
+                    )
+                continue
             except Exception:
                 logger.exception("Bot polling failed unexpectedly")
                 if self._wait(backoff_seconds):
