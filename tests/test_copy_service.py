@@ -28,6 +28,26 @@ class FakeClient:
     def iter_history(self, source_id):
         yield from self.history
 
+    def forward_messages(
+        self,
+        source_id,
+        destination_id,
+        message_ids,
+        send_copy,
+    ):
+        ids = tuple(message_ids)
+        self.forwarded.append(
+            (source_id, destination_id, ids, send_copy)
+        )
+        if self.responses:
+            response = self.responses.pop(0)
+            if isinstance(response, BaseException):
+                raise response
+            if isinstance(response, list):
+                return response
+            return [response]
+        return [message_id + 1000 for message_id in ids]
+
     def forward_message(
         self,
         source_id,
@@ -35,15 +55,12 @@ class FakeClient:
         message_id,
         send_copy,
     ):
-        self.forwarded.append(
-            (source_id, destination_id, message_id, send_copy)
-        )
-        if self.responses:
-            response = self.responses.pop(0)
-            if isinstance(response, BaseException):
-                raise response
-            return response
-        return message_id + 1000
+        return self.forward_messages(
+            source_id,
+            destination_id,
+            [message_id],
+            send_copy,
+        )[0]
 
 
 class CapturingThreadFactory:
@@ -119,7 +136,7 @@ def test_realtime_item_runs_before_queued_history_item(
 
     service._process_next_for_test()
 
-    assert fake_client.forwarded[0][2] == 2
+    assert fake_client.forwarded[0][2] == (2,)
 
 
 def test_same_priority_uses_stable_enqueue_sequence(
@@ -133,7 +150,7 @@ def test_same_priority_uses_stable_enqueue_sequence(
     service._process_next_for_test()
     service._process_next_for_test()
 
-    assert [call[2] for call in fake_client.forwarded] == [2, 1]
+    assert [call[2] for call in fake_client.forwarded] == [(2,), (1,)]
 
 
 def test_copy_record_deduplicates_forwarding(service, fake_client, store, route):
@@ -174,7 +191,7 @@ def test_removed_dynamic_copy_still_runs_when_builtin_route_exists(
 
     service._process_next_for_test()
 
-    assert fake_client.forwarded[0][2] == 2
+    assert fake_client.forwarded[0][2] == (2,)
 
 
 def test_success_is_recorded_only_after_forwarding(
@@ -193,8 +210,77 @@ def test_success_is_recorded_only_after_forwarding(
         2,
     )
     assert fake_client.forwarded == [
-        (route.source_id, route.destination_id, 2, True)
+        (route.source_id, route.destination_id, (2,), True)
     ]
+
+
+def test_album_batch_is_forwarded_and_recorded_together(
+    service,
+    fake_client,
+    store,
+    route,
+):
+    service.enqueue_realtime(route, message_ids=(11, 12, 13), dynamic=False)
+
+    service._process_next_for_test()
+
+    assert fake_client.forwarded == [
+        (route.source_id, route.destination_id, (11, 12, 13), True)
+    ]
+    assert store.was_copied(route.source_id, route.destination_id, 11)
+    assert store.was_copied(route.source_id, route.destination_id, 12)
+    assert store.was_copied(route.source_id, route.destination_id, 13)
+
+
+def test_history_job_groups_album_messages_into_one_forward(
+    store,
+    registry,
+    fake_client,
+    route,
+):
+    fake_client.history = [
+        {
+            "id": 13,
+            "media_album_id": 77,
+            "content": {"@type": "messageVideo"},
+        },
+        {
+            "id": 12,
+            "media_album_id": 77,
+            "content": {"@type": "messageVideo"},
+        },
+        {
+            "id": 11,
+            "media_album_id": 77,
+            "content": {"@type": "messageVideo"},
+        },
+        {
+            "id": 5,
+            "media_album_id": 0,
+            "content": {"@type": "messageText"},
+        },
+    ]
+    factory = CapturingThreadFactory()
+    service = CopyService(
+        fake_client,
+        store,
+        registry,
+        thread_factory=factory,
+    )
+    results = []
+
+    job = service.start_history_job(route, 42, 99, callback=results.append)
+    factory.targets[0]()
+    while service._process_next_for_test():
+        pass
+
+    assert fake_client.forwarded == [
+        (route.source_id, route.destination_id, (11, 12, 13), True),
+        (route.source_id, route.destination_id, (5,), True),
+    ]
+    assert results[0].status == "completed"
+    assert results[0].copied_count == 4
+    assert job.id == results[0].job_id
 
 
 def test_flood_wait_uses_server_delay_with_cap_and_bounded_attempts(
@@ -506,7 +592,7 @@ def test_history_backpressure_does_not_block_realtime_priority(
     service.enqueue_realtime(route, 3, dynamic=False)
     service._process_next_for_test()
 
-    assert client.forwarded[0][2] == 3
+    assert client.forwarded[0][2] == (3,)
     service._process_next_for_test()
     assert client.history_finished.wait(timeout=1)
     service._process_next_for_test()
@@ -543,20 +629,21 @@ class BlockingForwardClient(FakeClient):
         self.release_forward = Event()
         self.forward_finished = Event()
 
-    def forward_message(
+    def forward_messages(
         self,
         source_id,
         destination_id,
-        message_id,
+        message_ids,
         send_copy,
     ):
+        ids = tuple(message_ids)
         self.forwarded.append(
-            (source_id, destination_id, message_id, send_copy)
+            (source_id, destination_id, ids, send_copy)
         )
         self.forward_started.set()
         try:
             assert self.release_forward.wait(timeout=2)
-            return 1001
+            return [message_id + 1000 for message_id in ids]
         finally:
             self.forward_finished.set()
 
@@ -630,17 +717,17 @@ class SignalingClient(FakeClient):
         super().__init__()
         self.forwarded_event = Event()
 
-    def forward_message(
+    def forward_messages(
         self,
         source_id,
         destination_id,
-        message_id,
+        message_ids,
         send_copy,
     ):
-        result = super().forward_message(
+        result = super().forward_messages(
             source_id,
             destination_id,
-            message_id,
+            message_ids,
             send_copy,
         )
         self.forwarded_event.set()

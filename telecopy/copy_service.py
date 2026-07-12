@@ -1,6 +1,6 @@
 """Serialized forwarding scheduler and historical copy jobs."""
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from itertools import count
 import logging
@@ -13,7 +13,7 @@ from typing import Protocol
 from telecopy.config import Route
 from telecopy.database import CopyJob, StateStore
 from telecopy.tasks import RouteRegistry
-from telecopy.tdlib_client import TdlibResponseError
+from telecopy.tdlib_client import EXCLUDE_TYPES, TdlibResponseError
 
 
 logger = logging.getLogger(__name__)
@@ -34,13 +34,13 @@ _FLOOD_WAIT_PATTERN = re.compile(
 class ForwardingClient(Protocol):
     def iter_history(self, chat_id: int) -> Iterator[dict]: ...
 
-    def forward_message(
+    def forward_messages(
         self,
         source_id: int,
         destination_id: int,
-        message_id: int,
+        message_ids: Sequence[int],
         send_copy: bool,
-    ) -> int: ...
+    ) -> list[int | None]: ...
 
 
 class ServiceStoppedError(RuntimeError):
@@ -60,7 +60,7 @@ class QueueItem:
     priority: int
     sequence: int
     route: Route = field(compare=False)
-    message_id: int = field(compare=False)
+    message_ids: tuple[int, ...] = field(compare=False)
     dynamic_route: bool = field(compare=False)
     job_id: int | None = field(compare=False)
 
@@ -186,11 +186,13 @@ class CopyService:
     def enqueue_realtime(
         self,
         route: Route,
-        message_id: int,
-        dynamic: bool,
+        message_id: int | None = None,
+        dynamic: bool = False,
+        *,
+        message_ids: Sequence[int] | None = None,
     ) -> None:
         """Queue real-time work without waiting for history capacity."""
-        self._validate_message_id(message_id)
+        ids = self._normalize_message_ids(message_id, message_ids)
         with self._lock:
             self._ensure_accepting()
             self._queue.put(
@@ -198,7 +200,7 @@ class CopyService:
                     REALTIME_PRIORITY,
                     next(self._sequence),
                     route,
-                    message_id,
+                    ids,
                     dynamic,
                     None,
                 )
@@ -207,11 +209,15 @@ class CopyService:
     def enqueue_history(
         self,
         route: Route,
-        message_id: int,
-        job_id: int,
+        message_id: int | None = None,
+        job_id: int | None = None,
+        *,
+        message_ids: Sequence[int] | None = None,
     ) -> None:
         """Queue historical work with interruptible bounded backpressure."""
-        self._validate_message_id(message_id)
+        if job_id is None:
+            raise TypeError("job_id is required")
+        ids = self._normalize_message_ids(message_id, message_ids)
         if not self._acquire_history_slot():
             raise ServiceStoppedError("Copy service is stopping")
         with self._lock:
@@ -222,7 +228,7 @@ class CopyService:
                         HISTORY_PRIORITY,
                         next(self._sequence),
                         route,
-                        message_id,
+                        ids,
                         False,
                         job_id,
                     )
@@ -293,16 +299,49 @@ class CopyService:
                     state.copied_count,
                 )
 
+            pending_album_id: int | None = None
+            pending_ids: list[int] = []
+
+            def flush_pending() -> bool:
+                nonlocal pending_album_id, pending_ids
+                if not pending_ids:
+                    return True
+                ids = tuple(sorted(pending_ids))
+                pending_ids = []
+                pending_album_id = None
+                return self._enqueue_produced_history(state, ids)
+
             for message in self._client.iter_history(state.route.source_id):
                 if self._stop_event.is_set():
                     break
                 if not isinstance(message, dict):
                     raise ValueError("History contains a malformed message")
-                if not self._enqueue_produced_history(
-                    state,
-                    message.get("id"),
-                ):
-                    break
+                content = message.get("content")
+                if isinstance(content, dict) and content.get("@type") in EXCLUDE_TYPES:
+                    continue
+                message_id = message.get("id")
+                self._validate_message_id(
+                    message_id,
+                    "History contains an invalid message ID",
+                )
+                album_id = message.get("media_album_id") or 0
+                if type(album_id) is not int:
+                    album_id = 0
+                if album_id == 0:
+                    if not flush_pending():
+                        break
+                    if not self._enqueue_produced_history(
+                        state,
+                        (message_id,),
+                    ):
+                        break
+                    continue
+                if pending_album_id is not None and album_id != pending_album_id:
+                    if not flush_pending():
+                        break
+                pending_album_id = album_id
+                pending_ids.append(message_id)
+            flush_pending()
         except Exception as error:
             error_message = str(error)
             self._record_fault(error)
@@ -318,12 +357,16 @@ class CopyService:
     def _enqueue_produced_history(
         self,
         state: _HistoryJobState,
-        message_id: int,
+        message_ids: Sequence[int],
     ) -> bool:
-        self._validate_message_id(
-            message_id,
-            "History contains an invalid message ID",
-        )
+        ids = tuple(message_ids)
+        if not ids:
+            return True
+        for message_id in ids:
+            self._validate_message_id(
+                message_id,
+                "History contains an invalid message ID",
+            )
         if not self._acquire_history_slot():
             return False
         with self._lock:
@@ -340,7 +383,7 @@ class CopyService:
                     HISTORY_PRIORITY,
                     next(self._sequence),
                     state.route,
-                    message_id,
+                    ids,
                     False,
                     state.job.id,
                 )
@@ -384,31 +427,46 @@ class CopyService:
         try:
             if item.dynamic_route and not self._registry.contains(item.route):
                 return
-            if self._store.was_copied(
-                item.route.source_id,
-                item.route.destination_id,
-                item.message_id,
-            ):
+            pending_ids = tuple(
+                message_id
+                for message_id in item.message_ids
+                if not self._store.was_copied(
+                    item.route.source_id,
+                    item.route.destination_id,
+                    message_id,
+                )
+            )
+            if not pending_ids:
                 return
 
-            destination_message_id = self._forward_with_retry(item)
-            self._store.record_copy(
-                item.route.source_id,
-                item.route.destination_id,
-                item.message_id,
-                destination_message_id,
+            destination_message_ids = self._forward_with_retry(
+                item.route,
+                pending_ids,
             )
-            if item.job_id is not None:
-                copied_count = self._store.increment_copy_job_progress(
-                    item.job_id
+            for source_message_id, destination_message_id in zip(
+                pending_ids,
+                destination_message_ids,
+                strict=True,
+            ):
+                if destination_message_id is None:
+                    continue
+                self._store.record_copy(
+                    item.route.source_id,
+                    item.route.destination_id,
+                    source_message_id,
+                    destination_message_id,
                 )
+                if item.job_id is not None:
+                    copied_count = self._store.increment_copy_job_progress(
+                        item.job_id
+                    )
         except _ForwardInterruptedError:
             pass
         except Exception as error:
             error_message = str(error)
             logger.error(
-                "Could not forward message %d on route %d -> %d: %s",
-                item.message_id,
+                "Could not forward messages %s on route %d -> %d: %s",
+                item.message_ids,
                 item.route.source_id,
                 item.route.destination_id,
                 error,
@@ -421,13 +479,17 @@ class CopyService:
                     error_message,
                 )
 
-    def _forward_with_retry(self, item: QueueItem) -> int:
+    def _forward_with_retry(
+        self,
+        route: Route,
+        message_ids: tuple[int, ...],
+    ) -> list[int | None]:
         for attempt in range(1, MAX_COPY_ATTEMPTS + 1):
             try:
-                return self._client.forward_message(
-                    item.route.source_id,
-                    item.route.destination_id,
-                    item.message_id,
+                return self._client.forward_messages(
+                    route.source_id,
+                    route.destination_id,
+                    message_ids,
                     self._send_copy,
                 )
             except Exception as error:
@@ -574,6 +636,26 @@ class CopyService:
     def _ensure_accepting(self) -> None:
         if not self._accepting:
             raise ServiceStoppedError("Copy service is stopping")
+
+    @classmethod
+    def _normalize_message_ids(
+        cls,
+        message_id: int | None,
+        message_ids: Sequence[int] | None,
+    ) -> tuple[int, ...]:
+        if message_ids is not None and message_id is not None:
+            raise ValueError("Pass message_id or message_ids, not both")
+        if message_ids is not None:
+            ids = tuple(message_ids)
+        elif message_id is not None:
+            ids = (message_id,)
+        else:
+            raise ValueError("message_id or message_ids is required")
+        if not ids:
+            raise ValueError("message_ids must not be empty")
+        for value in ids:
+            cls._validate_message_id(value)
+        return ids
 
     @staticmethod
     def _validate_message_id(

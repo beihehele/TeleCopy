@@ -578,6 +578,31 @@ def test_forward_message_calls_forward_messages_and_returns_target_id(
     assert telegram.forward_result.wait_raise_exc_values == [False]
 
 
+def test_forward_messages_sends_album_ids_sorted_ascending(
+    config, telegram_factory
+):
+    telegram_factory = telegram_factory
+    client = TdlibClient(config, telegram_factory=telegram_factory)
+    client.connect()
+    telegram = telegram_factory.instances[0]
+    telegram.forward_result = FakeAsyncResult(
+        {
+            "@type": "messages",
+            "messages": [{"id": 9001}, {"id": 9002}, {"id": 9003}],
+        }
+    )
+
+    target_ids = client.forward_messages(
+        -1001,
+        -2001,
+        [30, 10, 20],
+        send_copy=True,
+    )
+
+    assert target_ids == [9001, 9002, 9003]
+    assert telegram.method_calls[-1][1]["message_ids"] == [10, 20, 30]
+
+
 def test_fake_telegram_models_blocking_error_behavior():
     telegram = FakeTelegram()
     telegram.forward_result = FakeAsyncResult(

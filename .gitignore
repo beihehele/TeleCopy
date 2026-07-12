@@ -5,6 +5,9 @@
 data/
 message/
 
+# Local design notes / plans
+docs/
+
 # Python
 __pycache__/
 *.pyc

@@ -19,6 +19,23 @@ from telecopy.config import AppConfig
 NEW_MESSAGE_UPDATE = "updateNewMessage"
 HISTORY_PAGE_SIZE = 100
 
+EXCLUDE_TYPES = frozenset({
+    "messageChatChangePhoto",
+    "messageChatChangeTitle",
+    "messageBasicGroupChatCreate",
+    "messageChatDeleteMember",
+    "messageChatAddMembers",
+    "messagePinMessage",
+    "messageChatSetTheme",
+    "messageChatSetMessageAutoDeleteTime",
+    "messageSupergroupChatCreate",
+    "messageChatJoinByLink",
+    "messageVideoChatStarted",
+    "messageVideoChatEnded",
+    "messageVideoChatScheduled",
+    "messageProximityAlertTriggered",
+})
+
 
 class TdlibClientError(RuntimeError):
     """Base exception for TDLib adapter failures."""
@@ -304,7 +321,38 @@ class TdlibClient:
         message_id: int,
         send_copy: bool,
     ) -> int:
-        """Forward once; retry and FloodWait policy belongs to the caller."""
+        """Forward one message; retry policy belongs to the caller."""
+        target_ids = self.forward_messages(
+            source_id,
+            destination_id,
+            [message_id],
+            send_copy,
+        )
+        target_id = target_ids[0]
+        if type(target_id) is not int or target_id <= 0:
+            raise TdlibResponseError(
+                "TDLib forwarding response contains no message id"
+            )
+        return target_id
+
+    def forward_messages(
+        self,
+        source_id: int,
+        destination_id: int,
+        message_ids: list[int] | tuple[int, ...],
+        send_copy: bool,
+    ) -> list[int | None]:
+        """Forward one or more messages in a single TDLib request.
+
+        Message IDs are sorted ascending before the call so albums stay
+        grouped. Return values line up with the sorted ID list; ``None``
+        means TDLib could not forward that entry.
+        """
+        sorted_ids = sorted(message_ids)
+        if not sorted_ids:
+            raise ValueError("message_ids must not be empty")
+        if any(type(message_id) is not int or message_id <= 0 for message_id in sorted_ids):
+            raise ValueError("message_ids must contain positive integers")
 
         telegram = self._require_telegram()
         try:
@@ -313,7 +361,7 @@ class TdlibClient:
                 {
                     "chat_id": destination_id,
                     "from_chat_id": source_id,
-                    "message_ids": [message_id],
+                    "message_ids": sorted_ids,
                     "send_copy": send_copy,
                 },
                 block=False,
@@ -342,17 +390,27 @@ class TdlibClient:
             raise TdlibResponseError(
                 "TDLib forwarding response contains no forwarded message"
             )
-        first_message = messages[0]
-        target_id = (
-            first_message.get("id")
-            if isinstance(first_message, dict)
-            else None
-        )
-        if type(target_id) is not int or target_id <= 0:
+        if len(messages) != len(sorted_ids):
             raise TdlibResponseError(
-                "TDLib forwarding response contains no message id"
+                "TDLib forwarding response length does not match request"
             )
-        return target_id
+
+        target_ids: list[int | None] = []
+        for entry in messages:
+            if entry is None:
+                target_ids.append(None)
+                continue
+            if not isinstance(entry, dict):
+                raise TdlibResponseError(
+                    "TDLib forwarding response contains an invalid message"
+                )
+            target_id = entry.get("id")
+            if type(target_id) is not int or target_id <= 0:
+                raise TdlibResponseError(
+                    "TDLib forwarding response contains no message id"
+                )
+            target_ids.append(target_id)
+        return target_ids
 
     def _require_telegram(self) -> TelegramClient:
         with self._lifecycle_lock:
