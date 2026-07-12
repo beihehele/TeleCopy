@@ -20,14 +20,15 @@
 
 ## 🔧 Features
 
-- 📤 Copy **Past Messages** from one Telegram chat to another
+- 📤 Copy **past messages** from one Telegram chat to another
 - 📅 **Custom date-range** filtering for selective cloning
-- 🔄 **Live Forwarding** of messages as they arrive
-- ⚙️ Interactive **menu system** for configuration and actions
+- 🔄 **Live forwarding** of messages as they arrive
+- 🤖 Optional **management Bot** for `/watch`, `/unwatch`, `/lswatch`, and `/copy`
+- 🐳 **Daemon mode** for Docker: auto-connect and monitor on startup
 - 📁 Supports all media types and polls
-- 💾 Automatically tracks copied messages to avoid duplicates
-- 🧼 Resets session when API credentials change
-- 📝 Structured logging to console and `telecopy.log`
+- 💾 SQLite-backed task and copy-progress persistence
+- 🧼 Resets TDLib session when API credentials change
+- 📝 Structured logging to console
 - 🔁 Automatic retry with FloodWait handling and exponential back-off
 
 
@@ -64,13 +65,20 @@ cp .env.example .env
 Or simply run the script — it will prompt you for any missing values on first launch.
 
 ### 6. Start TeleCopy
+
+**Local development** — run the daemon directly:
+
 ```bash
 python main.py
 ```
 
+On first launch, TeleCopy connects to Telegram and may prompt for login in the terminal. After authorization, it keeps monitoring configured routes until you stop it with `Ctrl+C`.
+
+**Docker** — use the two-step flow below (interactive login once, then background daemon).
+
 ---
 
-## 🐳 Docker Image
+## 🐳 Docker Deployment
 
 Tagged releases publish a Linux `amd64` Docker image to GitHub Container Registry:
 
@@ -78,35 +86,40 @@ Tagged releases publish a Linux `amd64` Docker image to GitHub Container Registr
 docker pull ghcr.io/beihehele/telecopy:latest
 ```
 
-Run TeleCopy with your `.env` file and persistent TDLib state.
-Host directory `./data` is bind-mounted to `/app/data` so sessions and copy progress survive container restarts:
+### 1. Configure `.env`
 
-```bash
-docker run --rm -it \
-  --env-file .env \
-  -v ./data:/app/data \
-  ghcr.io/beihehele/telecopy:latest
-```
+Copy `.env.example` to `.env` and fill in credentials. `SOURCE` and `DESTINATION` are optional; when both are set, TeleCopy monitors that built-in route automatically. Set `BOT_TOKEN` and `BOT_ADMIN_IDS` to enable private-chat management commands.
 
-Or use the included `docker-compose.yml`:
+### 2. Log in once (interactive)
 
-```yaml
-services:
-  telecopy:
-    image: ghcr.io/beihehele/telecopy:latest
-    env_file:
-      - .env
-    stdin_open: true
-    tty: true
-    volumes:
-      - ./data:/app/data
-```
-
-Start an interactive session with:
+Host directory `./data` is bind-mounted to `/app/data` so sessions, SQLite state, and copy progress survive container restarts:
 
 ```bash
 docker compose run --rm telecopy
 ```
+
+Complete Telegram authorization in the terminal. When login succeeds, exit the container.
+
+### 3. Run the daemon
+
+```bash
+docker compose up -d
+```
+
+TeleCopy connects on startup, restores watches from SQLite, and forwards new messages from all effective routes. The compose file sets `restart: unless-stopped`.
+
+### Management Bot commands
+
+When `BOT_TOKEN` is configured, authorized admins (`BOT_ADMIN_IDS`, comma-separated Telegram user IDs) can manage watches from a **private chat** with the Bot:
+
+| Command | Description |
+|---|---|
+| `/watch <source_id> [destination_id]` | Add a dynamic watch. Uses env `DESTINATION` when destination is omitted. |
+| `/unwatch <source_id>` | Remove a dynamic watch |
+| `/lswatch` | List dynamic watches (built-in `SOURCE→DESTINATION` route is hidden) |
+| `/copy <source_id> [destination_id]` | Queue a one-shot history copy job |
+
+Live forwarding continues even when the Bot is not configured.
 
 ---
 
@@ -139,24 +152,15 @@ Also, when setting `PHONE`, include your country code (e.g. `+12025551234`).
 
 ---
 #### 🔎 Restarting Instructions
-Each time you restart the terminal, activate the virtual environment first:
+
+**Local:** activate the virtual environment and run the daemon:
+
 ```bash
 source .venv/bin/activate
 python main.py
 ```
----
-### 🔥 Main Menu
-```
-0. Connect to Telegram
-1. Set source and destination
-2. Copy full history
-3. Live monitoring (auto-forward)
-4. Copy by date range
-5. Update API credentials
-6. Advanced settings
-7. Exit
-```
 
+**Docker:** after the one-time login, restart with `docker compose up -d`.
 ---
 
 ### ⚙️ Configuration Reference (`.env`)
@@ -166,14 +170,14 @@ python main.py
 | `PHONE` | ✅ | Your Telegram phone number with country code |
 | `API_ID` | ✅ | From my.telegram.org/apps |
 | `API_HASH` | ✅ | From my.telegram.org/apps |
-| `SOURCE` | ✅* | Source chat ID |
-| `DESTINATION` | ✅* | Destination chat ID |
 | `DB_PASSWORD` | ✅ | Encryption key for the local TDLib database |
+| `SOURCE` | ❌ | Built-in source chat ID (monitored when `DESTINATION` is also set) |
+| `DESTINATION` | ❌ | Built-in destination chat ID, or default for `/watch` without destination |
+| `BOT_TOKEN` | ❌ | Telegram Bot token for management commands |
+| `BOT_ADMIN_IDS` | ❌ | Comma-separated Telegram user IDs allowed to use Bot commands |
 | `FILES_DIRECTORY` | ❌ | Where TDLib stores downloaded media (default: `data/tdlib_files`) |
 | `SEND_COPY` | ❌ | `true` strips "Forwarded from" header; `false` preserves it (default: `true`) |
 | `PROXY_URL` | ❌ | SOCKS5 proxy URL, e.g. `socks5://user:pass@host:port` |
-
-\* Set interactively via menu option 1 after connecting.
 
 ---
 ### 🚧 Limitation

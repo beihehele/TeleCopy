@@ -1,6 +1,7 @@
 services:
   telecopy:
     image: ghcr.io/beihehele/telecopy:latest
+    restart: unless-stopped
     env_file:
       - .env
     stdin_open: true
