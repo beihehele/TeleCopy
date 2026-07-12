@@ -2,6 +2,7 @@ import json
 from io import BytesIO
 from pathlib import Path
 import urllib.error
+import urllib.request
 
 import pytest
 
@@ -342,3 +343,77 @@ def test_api_request_passes_numeric_timeout(monkeypatch, store, registry):
 
     assert timeouts == [35]
     assert isinstance(timeouts[0], int)
+
+
+def test_build_http_opener_without_proxy_uses_urlopen():
+    from telecopy.admin_bot import build_http_opener
+    import urllib.request
+
+    opener = build_http_opener(None)
+    assert opener is urllib.request.urlopen
+
+
+def test_build_http_opener_with_proxy_uses_socks5(monkeypatch):
+    from telecopy import admin_bot
+
+    captured = {}
+
+    class FakeHandler:
+        def __init__(self, *args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+
+    class FakeOpener:
+        def open(self, request, timeout=None):
+            return FakeResponse({"ok": True, "result": []})
+
+    monkeypatch.setattr(admin_bot, "SocksiPyHandler", FakeHandler)
+    monkeypatch.setattr(
+        admin_bot.urllib.request,
+        "build_opener",
+        lambda *handlers: FakeOpener(),
+    )
+
+    opener = admin_bot.build_http_opener(
+        "socks5://Clash:secret@192.168.0.2:7891"
+    )
+    assert opener is not urllib.request.urlopen
+
+    response = opener(
+        urllib.request.Request("https://api.telegram.org"),
+        timeout=35,
+    )
+    assert response.read()
+
+    assert captured["args"][0] == admin_bot.socks.SOCKS5
+    assert captured["args"][1] == "192.168.0.2"
+    assert captured["args"][2] == 7891
+    assert captured["args"][3] is True
+    assert captured["args"][4] == "Clash"
+    assert captured["args"][5] == "secret"
+
+
+def test_build_admin_bot_uses_proxy_opener(monkeypatch, store, registry):
+    from telecopy.admin_bot import build_admin_bot
+
+    config = make_config(
+        monkeypatch,
+        BOT_TOKEN="token",
+        BOT_ADMIN_IDS="42",
+        PROXY_URL="socks5://user:pass@127.0.0.1:1080",
+    )
+    sentinel = object()
+    monkeypatch.setattr(
+        "telecopy.admin_bot.build_http_opener",
+        lambda proxy_url: sentinel if proxy_url else urllib.request.urlopen,
+    )
+
+    bot = build_admin_bot(
+        config,
+        store,
+        registry,
+        FakeTdlib(),
+        FakeCopyService(),
+    )
+
+    assert bot._opener is sentinel

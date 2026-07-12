@@ -11,6 +11,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import socks
+from sockshandler import SocksiPyHandler
+
 from telecopy.config import AppConfig, Route
 from telecopy.copy_service import (
     CopyService,
@@ -24,7 +27,7 @@ from telecopy.database import (
     StateStore,
 )
 from telecopy.tasks import RouteRegistry
-from telecopy.tdlib_client import TdlibClient
+from telecopy.tdlib_client import TdlibClient, parse_proxy_url
 
 
 logger = logging.getLogger(__name__)
@@ -44,6 +47,30 @@ class HttpResponse(Protocol):
 
 
 HttpOpener = Callable[..., HttpResponse]
+
+
+def build_http_opener(proxy_url: str | None) -> HttpOpener:
+    """Build a Bot API opener; optionally tunnel HTTPS through SOCKS5."""
+    if proxy_url is None:
+        return urllib.request.urlopen
+
+    settings = parse_proxy_url(proxy_url)
+    username = settings.type.get("username") or None
+    password = settings.type.get("password") or None
+    handler = SocksiPyHandler(
+        socks.SOCKS5,
+        settings.server,
+        settings.port,
+        True,
+        username,
+        password,
+    )
+    opener = urllib.request.build_opener(handler)
+
+    def open_url(request, timeout=None):
+        return opener.open(request, timeout=timeout)
+
+    return open_url
 
 
 @dataclass(frozen=True)
@@ -221,13 +248,17 @@ class AdminBot:
     ) -> None:
         self._config = config
         self._commands = commands
-        self._opener = opener or urllib.request.urlopen
+        self._opener = opener or build_http_opener(config.proxy_url)
         self._thread_factory = thread_factory
         self._lock = RLock()
         self._stop_event = Event()
         self._thread: Thread | None = None
         self._offset = 0
         self._status = self._evaluate_status()
+        if self._status.enabled and config.proxy_url is not None and opener is None:
+            logger.info(
+                "Management Bot will use PROXY_URL for Bot API requests"
+            )
 
     @property
     def status(self) -> BotStatus:
@@ -445,4 +476,8 @@ def build_admin_bot(
     opener: HttpOpener | None = None,
 ) -> AdminBot:
     commands = AdminCommands(config, store, registry, tdlib, copy_service)
-    return AdminBot(config, commands, opener=opener)
+    return AdminBot(
+        config,
+        commands,
+        opener=opener or build_http_opener(config.proxy_url),
+    )

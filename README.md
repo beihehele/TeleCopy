@@ -177,7 +177,7 @@ python main.py
 | `BOT_ADMIN_IDS` | ❌ | Comma-separated Telegram user IDs allowed to use Bot commands |
 | `FILES_DIRECTORY` | ❌ | Where TDLib stores downloaded media (default: `data/tdlib_files`) |
 | `SEND_COPY` | ❌ | `true` strips "Forwarded from" header; `false` preserves it (default: `true`) |
-| `PROXY_URL` | ❌ | SOCKS5 proxy URL, e.g. `socks5://user:pass@host:port` |
+| `PROXY_URL` | ❌ | SOCKS5 proxy for TDLib and the management Bot, e.g. `socks5://user:pass@host:port` |
 
 ---
 ### 🚧 Limitation
